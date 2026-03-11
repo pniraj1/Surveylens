@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "SurveyLens",
+    "slug": "surveylens",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f172a"
+      },
+      "package": "com.surveylens.app",
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES"
+      ],
+      "config": {
+        "googleMobileAdsAppId": "ca-app-pub-6365268430069678~XXXXXXXXXX"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.surveylens.app",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "SurveyLens needs camera access to capture survey photos.",
+        "NSLocationWhenInUseUsageDescription": "SurveyLens uses GPS to tag photo locations for survey records.",
+        "NSPhotoLibraryUsageDescription": "SurveyLens saves survey photos to your photo library.",
+        "GADApplicationIdentifier": "ca-app-pub-6365268430069678~XXXXXXXXXX"
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow SurveyLens to access your camera to capture survey photos."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow SurveyLens to use your location to geotag photos."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow SurveyLens to save photos.",
+          "savePhotosPermission": "Allow SurveyLens to save photos.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      "react-native-google-mobile-ads"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "your-eas-project-id"
+      }
+    }
+  }
+}
