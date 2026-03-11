@@ -52,8 +52,7 @@
           "savePhotosPermission": "Allow SurveyLens to save photos.",
           "isAccessMediaLocationEnabled": true
         }
-      ],
-      "react-native-google-mobile-ads"
+      ]
     ],
     "extra": {
       "admobBanner":       "ca-app-pub-6365268430069678/9574699422",
