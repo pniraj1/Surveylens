@@ -36,6 +36,10 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
+      # Copy google-services.json into the Android app folder
+      - name: Copy google-services.json
+        run: cp google-services.json android/app/google-services.json
+
       - name: Decode keystore from GitHub Secret
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/surveylens.keystore
