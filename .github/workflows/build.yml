@@ -36,28 +36,32 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      # Copy google-services.json into the Android app folder
       - name: Copy google-services.json
         run: cp google-services.json android/app/google-services.json
 
-      - name: Decode keystore from GitHub Secret
+      - name: Patch project build.gradle (add google-services classpath)
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/surveylens.keystore
+          python3 - << 'PYEOF'
+          with open('android/build.gradle', 'r') as f:
+              content = f.read()
+          gms = "        classpath('com.google.gms:google-services:4.4.0')"
+          if 'com.google.gms:google-services' not in content:
+              content = content.replace('dependencies {', 'dependencies {\n' + gms, 1)
+              with open('android/build.gradle', 'w') as f:
+                  f.write(content)
+              print("Added google-services classpath")
+          PYEOF
 
-      - name: Write signing config to local.properties
-        run: |
-          cat >> android/local.properties << PROPS
-          MYAPP_UPLOAD_STORE_FILE=surveylens.keystore
-          MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}
-          MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_STORE_PASSWORD }}
-          MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}
-          PROPS
-
-      - name: Patch build.gradle for release signing
+      - name: Patch app build.gradle (signing + google-services + compileSdk)
         run: |
           python3 - << 'PYEOF'
           with open('android/app/build.gradle', 'r') as f:
               content = f.read()
+
+          if 'compileSdkVersion' not in content:
+              content = content.replace('android {', 'android {\n    compileSdkVersion 34', 1)
+              print("Added compileSdkVersion 34")
+
           signing_block = """
               signingConfigs {
                   release {
@@ -74,10 +78,41 @@ jobs:
           if 'signingConfigs' not in content:
               content = content.replace('    buildTypes {', signing_block + '    buildTypes {')
               content = content.replace('release {\n', 'release {\n            signingConfig signingConfigs.release\n', 1)
-              with open('android/app/build.gradle', 'w') as f:
-                  f.write(content)
-          print("Done patching build.gradle")
+              print("Added signing config")
+
+          if "apply plugin: 'com.google.gms.google-services'" not in content:
+              content = content + "\napply plugin: 'com.google.gms.google-services'\n"
+              print("Applied google-services plugin")
+
+          with open('android/app/build.gradle', 'w') as f:
+              f.write(content)
           PYEOF
+
+      - name: Patch AndroidManifest.xml (AdMob App ID)
+        run: |
+          python3 - << 'PYEOF'
+          with open('android/app/src/main/AndroidManifest.xml', 'r') as f:
+              content = f.read()
+          admob = '        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6365268430069678~9213608900"/>'
+          if 'com.google.android.gms.ads.APPLICATION_ID' not in content:
+              content = content.replace('</application>', admob + '\n    </application>')
+              with open('android/app/src/main/AndroidManifest.xml', 'w') as f:
+                  f.write(content)
+              print("Added AdMob App ID to manifest")
+          PYEOF
+
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/surveylens.keystore
+
+      - name: Write signing config to local.properties
+        run: |
+          cat >> android/local.properties << PROPS
+          MYAPP_UPLOAD_STORE_FILE=surveylens.keystore
+          MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}
+          MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_STORE_PASSWORD }}
+          MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}
+          PROPS
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
