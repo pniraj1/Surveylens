@@ -1,40 +1,30 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  StatusBar, Alert, ActivityIndicator,
+  StatusBar, Alert, ActivityIndicator, SafeAreaView,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as MediaLibrary from 'expo-media-library';
-import { getCurrentLocation, requestLocationPermission } from '../utils/gpsUtils';
-import { getSettings, getActiveProject, QUALITY_MAP, addPhotoToLog, saveSettings } from '../utils/storageUtils';
+import * as ImagePicker from 'expo-image-picker';
+import { getCurrentLocation, requestLocationPermission, formatGPS } from '../utils/gpsUtils';
+import { getSettings, getActiveProject, QUALITY_MAP, saveSettings } from '../utils/storageUtils';
 import { trackPhotoTaken } from '../utils/adManager';
-import WatermarkOverlay from '../components/WatermarkOverlay';
+
+const QUALITIES = ['low', 'medium', 'high', 'raw'];
+const QUALITY_LABELS = { low: 'Low', medium: 'Med', high: 'High', raw: 'RAW' };
 
 export default function CameraScreen({ navigation }) {
-  const [permission, requestPermission] = useCameraPermissions();
-  const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
-  const cameraRef = useRef(null);
-  // [FIX R1] Store interval ref so we can clear it on unmount
   const gpsIntervalRef = useRef(null);
 
   const [settings, setSettings] = useState(null);
   const [project, setProject] = useState(null);
   const [gps, setGps] = useState(null);
+  const [gpsStatus, setGpsStatus] = useState('searching');
   const [capturing, setCapturing] = useState(false);
-  const [showQualityPanel, setShowQualityPanel] = useState(false);
-  const [facing, setFacing] = useState('back');
-  const [flash, setFlash] = useState('off');
 
   useEffect(() => {
     loadData();
     startGPS();
-
-    // [FIX R1] Cleanup GPS interval when screen unmounts
     return () => {
-      if (gpsIntervalRef.current) {
-        clearInterval(gpsIntervalRef.current);
-        gpsIntervalRef.current = null;
-      }
+      if (gpsIntervalRef.current) clearInterval(gpsIntervalRef.current);
     };
   }, [loadData]);
 
@@ -43,8 +33,7 @@ export default function CameraScreen({ navigation }) {
     return unsubscribe;
   }, [navigation, loadData]);
 
-  // [FIX] useCallback so useEffect dependency is stable
-  const loadData = React.useCallback(async () => {
+  const loadData = useCallback(async () => {
     const s = await getSettings();
     const p = await getActiveProject();
     setSettings(s);
@@ -54,16 +43,16 @@ export default function CameraScreen({ navigation }) {
 
   const startGPS = async () => {
     const granted = await requestLocationPermission();
-    if (granted) {
-      // [FIX E2] GPS with timeout fallback
-      const loc = await getCurrentLocation();
-      setGps(loc);
-      // [FIX R1] Store ref so we can clear it
-      gpsIntervalRef.current = setInterval(async () => {
-        const updated = await getCurrentLocation();
-        if (updated) setGps(updated);
-      }, 10000);
-    }
+    if (!granted) { setGpsStatus('unavailable'); return; }
+
+    const loc = await getCurrentLocation();
+    if (loc) { setGps(loc); setGpsStatus('ok'); }
+    else { setGpsStatus('unavailable'); }
+
+    gpsIntervalRef.current = setInterval(async () => {
+      const updated = await getCurrentLocation();
+      if (updated) { setGps(updated); setGpsStatus('ok'); }
+    }, 10000);
   };
 
   const getTimestamp = () => {
@@ -73,266 +62,279 @@ export default function CameraScreen({ navigation }) {
     return new Date().toLocaleString();
   };
 
-  // [FIX R2] Moved quality update out of inline async — no dynamic imports
   const handleQualityChange = useCallback(async (q) => {
     const updated = { ...settings, quality: q };
     await saveSettings(updated);
     setSettings(updated);
-    setShowQualityPanel(false);
   }, [settings]);
 
   const takePicture = async () => {
-    if (!cameraRef.current || capturing) return;
+    if (capturing) return;
     setCapturing(true);
     try {
+      // Request camera permission via ImagePicker
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera access is required to take photos.');
+        setCapturing(false);
+        return;
+      }
+
       const quality = QUALITY_MAP[settings?.quality || 'high'];
-      const photo = await cameraRef.current.takePictureAsync({
+
+      // Launch the system camera
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality,
-        skipProcessing: false,
+        exif: true,
+        allowsEditing: false,
       });
 
-      // [FIX C1] Sanitize folder names — strip characters that break file paths
+      if (result.canceled || !result.assets?.length) {
+        setCapturing(false);
+        return;
+      }
+
+      const asset = result.assets[0];
+
+      // Snapshot GPS at moment of capture (try fresh fix, fall back to last known)
+      const captureGps = (await getCurrentLocation()) ?? gps;
+
       const sanitize = (str) => (str || '').replace(/[\/\\:*?"<>|]/g, '_').trim();
-      const safeFolder = sanitize(project?.folder) || 'SurveyLens';
-      const safeSubfolder = sanitize(project?.subfolder);
 
       const photoData = {
-        uri: photo.uri,
-        width: photo.width,
-        height: photo.height,
-        gps,
+        uri: asset.uri,
+        width: asset.width,
+        height: asset.height,
+        gps: captureGps,
         timestamp: getTimestamp(),
         quality: settings?.quality || 'high',
         project: project?.name,
         projectId: project?.id,
-        folder: safeFolder,
-        subfolder: safeSubfolder,
+        folder: sanitize(project?.folder) || 'SurveyLens',
+        subfolder: sanitize(project?.subfolder),
         savedAt: new Date().toISOString(),
         watermarks: settings?.watermarks,
       };
 
-      // Save to media library
-      if (mediaPermission?.granted) {
-        try {
-          const album = safeSubfolder ? `${safeFolder}/${safeSubfolder}` : safeFolder;
-          const asset = await MediaLibrary.createAssetAsync(photo.uri);
-          await MediaLibrary.createAlbumAsync(album, asset, false);
-          photoData.assetId = asset.id;
-        } catch (saveErr) {
-          // [FIX E1] Storage full or permission error — log but don't crash
-          console.warn('Media save error:', saveErr);
-          Alert.alert(
-            'Save Warning',
-            'Photo captured but could not be saved to gallery. Your device may be full.',
-            [{ text: 'OK' }]
-          );
-        }
-      } else {
-        // [FIX E5] Permission denied mid-session — request again
-        await requestMediaPermission();
-      }
-
-      await addPhotoToLog(photoData);
+      // NOTE: We do NOT save to media library here.
+      // PreviewScreen burns watermarks via ViewShot and saves the watermarked version.
       trackPhotoTaken();
       navigation.navigate('Preview', { photo: photoData });
 
     } catch (e) {
       Alert.alert('Capture Error', 'Failed to capture photo. Please try again.');
       console.error('takePicture error:', e);
-    } finally {
       setCapturing(false);
     }
+    // Don't reset capturing here — navigating away handles it naturally
   };
 
-  if (!permission) {
-    return <View style={styles.loading}><ActivityIndicator color="#f59e0b" /></View>;
-  }
-
-  if (!permission.granted) {
+  if (!settings) {
     return (
-      <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>📷 Camera access needed</Text>
-        <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
-          <Text style={styles.permissionBtnText}>Grant Camera Access</Text>
-        </TouchableOpacity>
+      <View style={styles.loading}>
+        <ActivityIndicator color="#f59e0b" size="large" />
       </View>
     );
   }
 
-  const qualities = ['low', 'medium', 'high', 'raw'];
+  const currentQuality = settings?.quality || 'high';
+  const gpsColor = gpsStatus === 'ok' ? '#22c55e' : gpsStatus === 'searching' ? '#f59e0b' : '#ef4444';
+  const gpsIcon = gpsStatus === 'ok' ? '📍' : gpsStatus === 'searching' ? '🔍' : '⚠️';
+  const gpsText = gpsStatus === 'ok'
+    ? formatGPS(gps)
+    : gpsStatus === 'searching' ? 'Acquiring GPS...' : 'GPS unavailable';
+
+  const activeWatermarks = settings?.watermarks
+    ? Object.entries(settings.watermarks).filter(([, v]) => v)
+    : [];
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
 
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing={facing}
-        flash={flash}
-      >
-        {/* Top Bar */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={() => navigation.navigate('Projects')} style={styles.iconBtn}>
-            <Text style={styles.iconBtnText}>📁</Text>
-          </TouchableOpacity>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.navigate('Projects')} style={styles.headerBtn}>
+          <Text style={styles.headerBtnText}>📁</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.projectBadge}
+          onPress={() => navigation.navigate('Setup', { isEdit: true, project })}
+        >
+          <Text style={styles.projectBadgeText} numberOfLines={1} ellipsizeMode="tail">
+            {project?.name || 'No Project'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerBtn}>
+          <Text style={styles.headerBtnText}>⚙️</Text>
+        </TouchableOpacity>
+      </View>
 
-          {/* [FIX C2] numberOfLines ensures long names don't break layout */}
-          <TouchableOpacity
-            style={styles.projectBadge}
-            onPress={() => navigation.navigate('Setup', { isEdit: true, project })}
-          >
-            <Text style={styles.projectBadgeText} numberOfLines={1} ellipsizeMode="tail">
-              {project?.name || 'No Project'}
-            </Text>
-          </TouchableOpacity>
+      {/* GPS bar */}
+      <View style={styles.gpsBar}>
+        <Text style={styles.gpsIcon}>{gpsIcon}</Text>
+        <Text style={[styles.gpsText, { color: gpsColor }]} numberOfLines={1}>{gpsText}</Text>
+        {gpsStatus === 'searching' && (
+          <ActivityIndicator size="small" color="#f59e0b" style={{ marginLeft: 8 }} />
+        )}
+      </View>
 
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.iconBtn}>
-            <Text style={styles.iconBtnText}>⚙️</Text>
-          </TouchableOpacity>
+      {/* Main area */}
+      <View style={styles.body}>
+
+        {/* Watermark preview card */}
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Will be watermarked on photo</Text>
+          {activeWatermarks.length > 0 ? (
+            <View style={styles.tagRow}>
+              {settings.watermarks.projectName && project?.name && (
+                <View style={styles.tag}><Text style={styles.tagText}>📁 {project.name}</Text></View>
+              )}
+              {settings.watermarks.gps && (
+                <View style={styles.tag}><Text style={styles.tagText}>📍 GPS coords</Text></View>
+              )}
+              {settings.watermarks.timestamp && (
+                <View style={styles.tag}><Text style={styles.tagText}>🕐 Timestamp</Text></View>
+              )}
+              {settings.watermarks.resolution && (
+                <View style={styles.tag}><Text style={styles.tagText}>📷 Quality</Text></View>
+              )}
+            </View>
+          ) : (
+            <Text style={styles.noWatermark}>No watermarks — enable in Settings ⚙️</Text>
+          )}
         </View>
 
-        {/* Watermark */}
-        {settings && (
-          <WatermarkOverlay
-            watermarks={settings.watermarks}
-            gps={gps}
-            timestamp={getTimestamp()}
-            quality={settings.quality}
-            projectName={project?.name}
-          />
-        )}
+        {/* Capture button */}
+        <TouchableOpacity
+          style={[styles.captureBtn, capturing && styles.captureBtnDisabled]}
+          onPress={takePicture}
+          disabled={capturing}
+          activeOpacity={0.85}
+        >
+          {capturing
+            ? <ActivityIndicator color="#0f172a" size="large" />
+            : <>
+                <Text style={styles.captureBtnIcon}>📷</Text>
+                <Text style={styles.captureBtnText}>CAPTURE</Text>
+              </>
+          }
+        </TouchableOpacity>
+        <Text style={styles.hint}>Opens system camera</Text>
+      </View>
 
-        {/* Quality Panel */}
-        {showQualityPanel && settings && (
-          <View style={styles.qualityPanel}>
-            <Text style={styles.qualityTitle}>Photo Quality</Text>
-            <View style={styles.qualityRow}>
-              {qualities.map((q) => (
-                <TouchableOpacity
-                  key={q}
-                  style={[styles.qualityBtn, settings.quality === q && styles.qualityBtnActive]}
-                  onPress={() => handleQualityChange(q)}
-                >
-                  <Text style={[styles.qualityBtnText, settings.quality === q && styles.qualityBtnTextActive]}>
-                    {q.toUpperCase()}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Bottom Controls */}
-        <View style={styles.bottomBar}>
-          <View style={styles.controlRow}>
+      {/* Quality selector — always visible, no floating panel */}
+      <View style={styles.qualitySection}>
+        <Text style={styles.qualityLabel}>Photo Quality</Text>
+        <View style={styles.qualityRow}>
+          {QUALITIES.map((q) => (
             <TouchableOpacity
-              style={styles.sideBtn}
-              onPress={() => setFlash(flash === 'off' ? 'on' : flash === 'on' ? 'auto' : 'off')}
+              key={q}
+              style={[styles.qualityBtn, currentQuality === q && styles.qualityBtnActive]}
+              onPress={() => handleQualityChange(q)}
             >
-              <Text style={styles.sideBtnText}>
-                {flash === 'off' ? '⚡' : flash === 'on' ? '💡' : '🌟'}
+              <Text style={[styles.qualityBtnText, currentQuality === q && styles.qualityBtnTextActive]}>
+                {q.toUpperCase()}
               </Text>
-              <Text style={styles.sideBtnLabel}>{flash}</Text>
+              <Text style={[styles.qualitySubText, currentQuality === q && styles.qualityBtnTextActive]}>
+                {QUALITY_LABELS[q]}
+              </Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.shutter, capturing && styles.shutterCapturing]}
-              onPress={takePicture}
-              disabled={capturing}
-            >
-              {capturing
-                ? <ActivityIndicator color="#0f172a" size="large" />
-                : <View style={styles.shutterInner} />
-              }
-            </TouchableOpacity>
-
-            <View style={styles.rightBtns}>
-              <TouchableOpacity
-                style={styles.sideBtn}
-                onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
-              >
-                <Text style={styles.sideBtnText}>🔄</Text>
-                <Text style={styles.sideBtnLabel}>flip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.sideBtn}
-                onPress={() => setShowQualityPanel(!showQualityPanel)}
-              >
-                <Text style={styles.sideBtnText}>🎚️</Text>
-                <Text style={styles.sideBtnLabel}>{settings?.quality || 'high'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={styles.galleryBtn}
-            onPress={() => navigation.navigate('Gallery')}
-          >
-            <Text style={styles.galleryBtnText}>🗂 View Gallery</Text>
-          </TouchableOpacity>
+          ))}
         </View>
-      </CameraView>
-    </View>
+      </View>
+
+      {/* Bottom nav */}
+      <View style={styles.bottomNav}>
+        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.navigate('Gallery')}>
+          <Text style={styles.navIcon}>🗂</Text>
+          <Text style={styles.navText}>Gallery</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navBtn} onPress={() => navigation.navigate('Batch')}>
+          <Text style={styles.navIcon}>📦</Text>
+          <Text style={styles.navText}>Batch</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  camera: { flex: 1 },
+  container: { flex: 1, backgroundColor: '#0f172a' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0f172a' },
-  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0f172a', padding: 24 },
-  permissionText: { color: '#f8fafc', fontSize: 18, marginBottom: 20, textAlign: 'center' },
-  permissionBtn: { backgroundColor: '#f59e0b', borderRadius: 12, padding: 16, paddingHorizontal: 32 },
-  permissionBtnText: { color: '#0f172a', fontWeight: '700', fontSize: 16 },
-  topBar: {
+
+  header: {
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', padding: 16, paddingTop: 48,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#1e293b',
   },
-  iconBtn: { padding: 8 },
-  iconBtnText: { fontSize: 24 },
+  headerBtn: { padding: 8 },
+  headerBtnText: { fontSize: 24 },
   projectBadge: {
-    backgroundColor: 'rgba(245,158,11,0.2)',
+    backgroundColor: 'rgba(245,158,11,0.15)',
     borderWidth: 1, borderColor: '#f59e0b',
-    borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6,
-    maxWidth: 180,
+    borderRadius: 20, paddingHorizontal: 16, paddingVertical: 6, maxWidth: 200,
   },
   projectBadgeText: { color: '#f59e0b', fontWeight: '600', fontSize: 13 },
-  qualityPanel: {
-    backgroundColor: 'rgba(15,23,42,0.92)',
-    margin: 16, borderRadius: 16, padding: 16,
-    position: 'absolute', bottom: 160, left: 0, right: 0,
+
+  gpsBar: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#1e293b', paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#0f172a',
   },
-  qualityTitle: { color: '#94a3b8', fontSize: 13, marginBottom: 12, textAlign: 'center' },
-  qualityRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
+  gpsIcon: { fontSize: 15, marginRight: 8 },
+  gpsText: { fontSize: 12, fontFamily: 'monospace', flex: 1 },
+
+  body: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+
+  card: {
+    width: '100%', backgroundColor: '#1e293b',
+    borderRadius: 14, padding: 16, marginBottom: 32,
+  },
+  cardLabel: { color: '#475569', fontSize: 11, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tag: {
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    borderWidth: 1, borderColor: '#f59e0b',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  tagText: { color: '#f59e0b', fontSize: 12 },
+  noWatermark: { color: '#475569', fontSize: 13, fontStyle: 'italic' },
+
+  captureBtn: {
+    width: 160, height: 160, borderRadius: 80,
+    backgroundColor: '#f59e0b',
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#f59e0b', shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5, shadowRadius: 20, elevation: 12,
+  },
+  captureBtnDisabled: { opacity: 0.6 },
+  captureBtnIcon: { fontSize: 40, marginBottom: 4 },
+  captureBtnText: { color: '#0f172a', fontWeight: '800', fontSize: 15, letterSpacing: 2 },
+  hint: { color: '#334155', fontSize: 12, marginTop: 12 },
+
+  qualitySection: {
+    paddingHorizontal: 16, paddingBottom: 12, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: '#1e293b',
+  },
+  qualityLabel: { color: '#475569', fontSize: 11, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 },
+  qualityRow: { flexDirection: 'row', gap: 8 },
   qualityBtn: {
-    flex: 1, padding: 12, borderRadius: 10,
-    borderWidth: 1, borderColor: '#334155', alignItems: 'center',
+    flex: 1, paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: '#334155',
+    alignItems: 'center', backgroundColor: '#1e293b',
   },
   qualityBtnActive: { backgroundColor: '#f59e0b', borderColor: '#f59e0b' },
-  qualityBtnText: { color: '#94a3b8', fontWeight: '600', fontSize: 12 },
+  qualityBtnText: { color: '#94a3b8', fontWeight: '700', fontSize: 12 },
   qualityBtnTextActive: { color: '#0f172a' },
-  bottomBar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingBottom: 32, paddingTop: 16, paddingHorizontal: 20,
+  qualitySubText: { color: '#475569', fontSize: 10, marginTop: 2 },
+
+  bottomNav: {
+    flexDirection: 'row', justifyContent: 'space-around',
+    paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#1e293b',
   },
-  controlRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  shutter: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 4, borderColor: '#f59e0b',
-  },
-  shutterCapturing: { backgroundColor: '#f59e0b' },
-  shutterInner: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff' },
-  sideBtn: { alignItems: 'center', width: 60 },
-  sideBtnText: { fontSize: 26 },
-  sideBtnLabel: { color: '#94a3b8', fontSize: 10, marginTop: 2 },
-  rightBtns: { gap: 12, alignItems: 'center' },
-  galleryBtn: {
-    alignSelf: 'center', borderWidth: 1, borderColor: '#475569',
-    borderRadius: 20, paddingHorizontal: 24, paddingVertical: 8,
-  },
-  galleryBtnText: { color: '#94a3b8', fontSize: 13 },
+  navBtn: { alignItems: 'center', padding: 8 },
+  navIcon: { fontSize: 22 },
+  navText: { color: '#64748b', fontSize: 11, marginTop: 3 },
 });
