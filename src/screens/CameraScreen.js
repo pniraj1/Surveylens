@@ -163,7 +163,7 @@ export default function CameraScreen({ navigation }) {
           onPress={() => navigation.navigate('Setup', { isEdit: true, project })}
         >
           <Text style={styles.projectBadgeText} numberOfLines={1} ellipsizeMode="tail">
-            {project?.name || 'No Project'}
+            {project?.folder || project?.name || 'No Folder'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.headerBtn}>
@@ -189,7 +189,7 @@ export default function CameraScreen({ navigation }) {
           {activeWatermarks.length > 0 ? (
             <View style={styles.tagRow}>
               {settings.watermarks.projectName && project?.name && (
-                <View style={styles.tag}><Text style={styles.tagText}>📁 {project.name}</Text></View>
+                <View style={styles.tag}><Text style={styles.tagText}>📁 {project.folder || project.name}</Text></View>
               )}
               {settings.watermarks.gps && (
                 <View style={styles.tag}><Text style={styles.tagText}>📍 GPS coords</Text></View>
