@@ -52,7 +52,7 @@ export default function SettingsScreen({ navigation }) {
 
   const qualities = ['low', 'medium', 'high', 'raw'];
   const watermarkItems = [
-    { key: 'projectName', label: 'Project Name', icon: '📁' },
+    { key: 'projectName', label: 'Folder Name', icon: '📂' },
     { key: 'gps', label: 'GPS Coordinates', icon: '📍' },
     { key: 'timestamp', label: 'Date & Time', icon: '🕐' },
     { key: 'resolution', label: 'Quality/Resolution', icon: '📷' },
