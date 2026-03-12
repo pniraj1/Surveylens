@@ -52,12 +52,19 @@
           "savePhotosPermission": "Allow SurveyLens to save photos.",
           "isAccessMediaLocationEnabled": true
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow SurveyLens to access your photos.",
+          "cameraPermission": "Allow SurveyLens to access your camera to capture survey photos."
+        }
       ]
     ],
     "extra": {
-      "admobBanner":       "ca-app-pub-6365268430069678/9574699422",
+      "admobBanner": "ca-app-pub-6365268430069678/9574699422",
       "admobInterstitial": "ca-app-pub-6365268430069678/8814987800",
-      "admobRewarded":     "ca-app-pub-6365268430069678/6002644716"
+      "admobRewarded": "ca-app-pub-6365268430069678/6002644716"
     }
   }
 }
