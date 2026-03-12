@@ -21,33 +21,51 @@ export default function ProjectsScreen({ navigation }) {
   };
 
   const handleDelete = (project) => {
-    Alert.alert('Delete Project', `Remove "${project.name}" from your list?`, [
+    const label = project.subfolder
+      ? `${project.folder} / ${project.subfolder}`
+      : project.folder || project.name;
+    Alert.alert('Delete Survey', `Remove "${label}" from your list?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
-        onPress: async () => { if (project?.id) { await deleteProject(project.id); loadProjects(); } },
+        onPress: async () => {
+          if (project?.id) { await deleteProject(project.id); loadProjects(); }
+        },
       },
     ]);
   };
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity style={styles.card} onPress={() => handleSelect(item)}>
-      <View style={styles.cardIcon}>
-        <Text style={styles.cardIconText}>📐</Text>
-      </View>
-      <View style={styles.cardBody}>
-        <Text style={styles.cardName}>{item.name}</Text>
-        <Text style={styles.cardPath}>
-          📂 {item.folder}{item.subfolder ? `/${item.subfolder}` : ''}
-        </Text>
-        {item.description ? <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text> : null}
-        <Text style={styles.cardDate}>Created {new Date(item.createdAt).toLocaleDateString()}</Text>
-      </View>
-      <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
-        <Text style={styles.deleteBtnText}>🗑</Text>
+  const renderItem = ({ item }) => {
+    const folderDisplay = item.folder || item.name || 'Unknown';
+    const fullPath = item.subfolder
+      ? `${folderDisplay} / ${item.subfolder}`
+      : folderDisplay;
+
+    return (
+      <TouchableOpacity style={styles.card} onPress={() => handleSelect(item)}>
+        <View style={styles.cardIcon}>
+          <Text style={styles.cardIconText}>📂</Text>
+        </View>
+        <View style={styles.cardBody}>
+          {/* Primary: folder / subfolder */}
+          <Text style={styles.cardFolder}>{folderDisplay}</Text>
+          {item.subfolder ? (
+            <Text style={styles.cardSubfolder}>└ {item.subfolder}</Text>
+          ) : null}
+          <Text style={styles.cardPath}>💾 /Pictures/{fullPath}/</Text>
+          {item.description ? (
+            <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text>
+          ) : null}
+          <Text style={styles.cardDate}>
+            {new Date(item.createdAt).toLocaleDateString()}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item)}>
+          <Text style={styles.deleteBtnText}>🗑</Text>
+        </TouchableOpacity>
       </TouchableOpacity>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -55,7 +73,7 @@ export default function ProjectsScreen({ navigation }) {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Projects</Text>
+        <Text style={styles.headerTitle}>Surveys</Text>
         <TouchableOpacity onPress={() => navigation.navigate('Setup')}>
           <Text style={styles.newText}>+ New</Text>
         </TouchableOpacity>
@@ -69,9 +87,9 @@ export default function ProjectsScreen({ navigation }) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={styles.emptyText}>No projects yet</Text>
+            <Text style={styles.emptyText}>No surveys yet</Text>
             <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation.navigate('Setup')}>
-              <Text style={styles.emptyBtnText}>Create First Project</Text>
+              <Text style={styles.emptyBtnText}>Create First Survey</Text>
             </TouchableOpacity>
           </View>
         }
@@ -101,10 +119,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   cardIconText: { fontSize: 22 },
-  cardBody: { flex: 1, gap: 3 },
-  cardName: { color: '#f8fafc', fontWeight: '700', fontSize: 15 },
-  cardPath: { color: '#94a3b8', fontSize: 12 },
-  cardDesc: { color: '#64748b', fontSize: 12 },
+  cardBody: { flex: 1, gap: 2 },
+  cardFolder: { color: '#f8fafc', fontWeight: '700', fontSize: 15 },
+  cardSubfolder: { color: '#f59e0b', fontSize: 13 },
+  cardPath: { color: '#475569', fontSize: 11, fontFamily: 'monospace', marginTop: 2 },
+  cardDesc: { color: '#64748b', fontSize: 12, marginTop: 2 },
   cardDate: { color: '#475569', fontSize: 11 },
   deleteBtn: { padding: 8 },
   deleteBtnText: { fontSize: 20 },
