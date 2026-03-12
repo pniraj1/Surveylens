@@ -16,11 +16,7 @@ export default function App() {
 
   const initApp = async () => {
     // Initialize AdMob — catch errors so app still works if AdMob fails
-    try {
-      await mobileAds().initialize();
-    } catch (e) {
-      console.warn('AdMob init failed (non-fatal):', e);
-    }
+ 
 
     // Check if user has an existing project
     try {
